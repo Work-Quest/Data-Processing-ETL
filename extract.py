@@ -3,7 +3,7 @@ import requests
 from config import BACKEND_LOG_ENDPOINT, BACKEND_API_KEY, BATCH_SIZE
 
 
-def fetch_logs(last_id: int):
+def fetch_logs(time_begin: str):
     """
     Fetch logs from backend starting after `last_id`.
 
@@ -18,22 +18,19 @@ def fetch_logs(last_id: int):
         headers["Authorization"] = f"Bearer {BACKEND_API_KEY}"
         headers["X-API-Key"] = BACKEND_API_KEY
 
-    params = {"after_id": last_id, "limit": BATCH_SIZE}
+    params = {"time_begin_raw": time_begin}
 
-    resp = requests.get(
-        BACKEND_LOG_ENDPOINT,
+    res = requests.get(
+        f"{BACKEND_LOG_ENDPOINT}/api/internal/logs",
         headers=headers,
         params=params,
         timeout=30,
     )
-    resp.raise_for_status()
+    res.raise_for_status()
 
-    data = resp.json()
-    if data is None:
-        return []
-    if not isinstance(data, list):
-        raise ValueError("Expected backend response to be a JSON array of logs")
-
-    return data
-
-
+    data = res.json()
+    print(data)
+    # if data is None:
+    #     return []
+    # if not isinstance(data, list):
+    #     raise ValueError("Expected backend response to be a JSON array of logs")
