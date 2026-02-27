@@ -1,4 +1,7 @@
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 BACKEND_LOG_ENDPOINT = os.getenv("BACKEND_LOG_ENDPOINT")
 BACKEND_API_KEY = os.getenv("BACKEND_API_KEY")
