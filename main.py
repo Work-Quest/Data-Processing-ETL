@@ -1,12 +1,13 @@
 from checkpoint import get_last_checkpoint, update_checkpoint
-from extract import fetch_logs
+from extract import extract_data
 from transform import build_features
 from load import upsert_features
 from train import train_kmeans
 
 
 def run_pipeline():
-    fetch_logs("2026-01-18 17:35:43.347119+00")
+    build_member_log_data = extract_data("2026-01-18 17:35:43.347119+00")
+    print(build_member_log_data)
     # while True:
     #     logs = fetch_logs(last_id)
     #
