@@ -124,7 +124,7 @@ ON kmeans_run(is_active)
 WHERE is_active = TRUE;
 
 -- ==========================================
--- 8. user_feature_daily : processed data
+-- 8. user_feature_profile : processed data
 -- ==========================================
 CREATE TABLE IF NOT EXISTS user_feature_profile (
     user_feature_profile_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

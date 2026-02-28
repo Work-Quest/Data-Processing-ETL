@@ -153,6 +153,9 @@ class CreateTasklLogDTO:
     project_id : str
     project_member_id: str
     event_type: int
+    task_id : str
+    task_name: str
+    task_priority: int
     created_at: datetime
 
 @dataclass(frozen=True)
@@ -160,6 +163,10 @@ class DeleteTasklLogDTO:
     project_id : str
     project_member_id: str
     event_type: int
+    task_created_at: datetime
+    task_id : str
+    task_name: str
+    task_priority: int
     created_at: datetime
 
 @dataclass(frozen=True)
@@ -167,5 +174,21 @@ class CompleteTasklLogDTO:
     project_id : str
     project_member_id: str
     event_type: int
+    task_id : str
+    task_name: str
+    task_priority: int
+    task_created_at: datetime
+    deadline: datetime
+    created_at: datetime
+
+@dataclass(frozen=True)
+class AssignedTasklLogDTO:
+    project_id : str
+    project_member_id: str
+    event_type: int
+    task_id : str
+    task_name: str
+    task_priority: int
+    task_created_at: datetime
     deadline: datetime
     created_at: datetime

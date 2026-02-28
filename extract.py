@@ -4,9 +4,13 @@ from config import BACKEND_LOG_ENDPOINT, BACKEND_API_KEY, BATCH_SIZE
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
+from utils import _parse_dt
+
+
 from log_dto import (
     AttackLogDTO,
     AttackedLogDTO,
+    AssignedTasklLogDTO,
     BuffLogDTO,
     BuffedLogDTO,
     CompleteTasklLogDTO,
@@ -56,35 +60,13 @@ def fetch_logs(time_begin):
 def extract_data(time_begin):
     """
     extract data to this format
-    data = [{ "project_member_id1" : { "attack_log" : [], "create_task_log":[]  }, "project_member"}]
+    data = { "project_member_id1" : { "attack_log" : [], "create_task_log":[]  }, "project_member_id2": { "attack_log" : [], "create_task_log":[]  }}
     """
-    logs = list(fetch_logs(time_begin))
+    logs = fetch_logs(time_begin)
     return build_member_log_data(logs)
 
 
-def _parse_dt(value: Any) -> datetime:
-    """
-    Backend returns ISO strings for created_at / deadline / etc.
-    Make it resilient to both 'Z' and '+00:00' formats.
-    """
-    if isinstance(value, datetime):
-        return value
-    if not value:
-        return datetime.now(timezone.utc)
-    if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(float(value), tz=timezone.utc)
-    s = str(value).strip()
-    # Django often serializes as "2026-02-28T12:34:56.123456Z"
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    try:
-        dt = datetime.fromisoformat(s)
-        # ensure tz-aware (default to UTC if missing)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except Exception:
-        return datetime.now(timezone.utc)
+
 
 
 def _to_int(value: Any, default: int = 0) -> int:
@@ -115,23 +97,23 @@ def _empty_member_logs() -> dict[str, list]:
         "create_task_log": [],
         "delete_task_log": [],
         "complete_task_log": [],
+        "assigned_task_log": []
     }
 
 
-def build_member_log_data(logs: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_member_log_data(logs: Iterable[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """
     Build the structure requested:
-        data = [
+        data =
           {
             "<project_member_id>": {
                "attack_log": [AttackLogDTO, ...],
                "create_task_log": [CreateTasklLogDTO, ...],
                ...
             },
-            "project_member": {...snapshot...} | None
-          },
-          ...
-        ]
+            "<project_member_id_2>": { ... },
+            ...
+          }
     """
     members: dict[str, dict[str, Any]] = {}
 
@@ -381,7 +363,7 @@ def build_member_log_data(logs: Iterable[dict[str, Any]]) -> list[dict[str, Any]
             continue
 
         if event_type == "KILL_PLAYER":
-            member_id = str(payload.get("receiver_id") or payload.get("player_id") or "") if (payload.get("receiver_id") or payload.get("player_id")) else ""
+            member_id = str(payload.get("receiver_id"))
             dto = DeadLogDTO(
                 project_id=str(project_id) if project_id else "",
                 project_member_id=member_id,
@@ -411,10 +393,19 @@ def build_member_log_data(logs: Iterable[dict[str, Any]]) -> list[dict[str, Any]
         # ---------- Task lifecycle ----------
         if event_type == "TASK_CREATED":
             member_id = str(actor_id) if actor_id else ""
+            task = payload.get("task") or {}
+            task_id = str(task.get("task_id")) or ""
+            task_name = str(task.get("task_name")) or ""
+            task_priority = task.get("priority") or ""
+            task_deadline = task.get("deadline") or ""
+            task_created_at_raw = (task.get("created_at")) or ""
             dto = CreateTasklLogDTO(
                 project_id=str(project_id) if project_id else "",
                 project_member_id=member_id,
                 event_type=str(event_type),
+                task_id=task_id,
+                task_name=task_name,
+                task_priority=task_priority,
                 created_at=created_at,
             )
             rec = _ensure_member(member_id)
@@ -425,10 +416,20 @@ def build_member_log_data(logs: Iterable[dict[str, Any]]) -> list[dict[str, Any]
 
         if event_type == "TASK_DELETED":
             member_id = str(actor_id) if actor_id else ""
+            task = payload.get("task") or {}
+            task_id = str(task.get("task_id")) or ""
+            task_name = str(task.get("task_name")) or ""
+            task_priority = task.get("priority") or ""
+            task_deadline = task.get("deadline") or ""
+            task_created_at_raw = (task.get("created_at")) or ""
             dto = DeleteTasklLogDTO(
                 project_id=str(project_id) if project_id else "",
                 project_member_id=member_id,
                 event_type=str(event_type),
+                task_created_at=_parse_dt(task_created_at_raw),
+                task_id=task_id,
+                task_name=task_name,
+                task_priority=task_priority,
                 created_at=created_at,
             )
             rec = _ensure_member(member_id)
@@ -439,11 +440,21 @@ def build_member_log_data(logs: Iterable[dict[str, Any]]) -> list[dict[str, Any]
 
         if event_type == "TASK_COMPLETED":
             member_id = str(actor_id) if actor_id else ""
+            task = payload.get("task") or {}
+            task_id = str(task.get("task_id")) or ""
+            task_name = str(task.get("task_name")) or ""
+            task_priority = task.get("priority") or ""
+            task_deadline = task.get("deadline") or ""
+            task_created_at_raw = (task.get("created_at")) or ""
             dto = CompleteTasklLogDTO(
                 project_id=str(project_id) if project_id else "",
                 project_member_id=member_id,
                 event_type=str(event_type),
-                deadline=_parse_dt(payload.get("deadline")),
+                task_created_at=_parse_dt(task_created_at_raw),
+                task_id=task_id,
+                task_name=task_name,
+                task_priority=task_priority,
+                deadline=payload.get("deadline"),
                 created_at=created_at,
             )
             rec = _ensure_member(member_id)
@@ -452,10 +463,31 @@ def build_member_log_data(logs: Iterable[dict[str, Any]]) -> list[dict[str, Any]
             _set_snapshot_if_missing(member_id, payload.get("actor"))
             continue
 
-        # Ignore other event types for now (TASK_UPDATED, ASSIGN_USER, etc.)
+        if event_type == "ASSIGN_USER":
+            # receiver_id is
+            member_id = str(payload.get("receiver_id"))
+            task = payload.get("task") or {}
+            task_id = str(task.get("task_id")) or ""
+            task_name = str(task.get("task_name")) or ""
+            task_priority = task.get("priority") or ""
+            task_deadline = task.get("deadline") or ""
+            task_created_at_raw = (task.get("created_at"))  or ""
+            dto = AssignedTasklLogDTO(
+                project_id=str(project_id) if project_id else "",
+                project_member_id=member_id,
+                event_type=str(event_type),
+                task_created_at=_parse_dt(task_created_at_raw),
+                task_id=task_id,
+                task_name=task_name,
+                task_priority=task_priority,
+                deadline=_parse_dt(task_deadline),
+                created_at=created_at,
+            )
+            rec = _ensure_member(member_id)
+            if rec:
+                rec["logs"]["assigned_task_log"].append(dto)
+            _set_snapshot_if_missing(member_id, payload.get("receiver_id"))
+            continue
 
-    # match the exact outer-list structure the user requested
-    result: list[dict[str, Any]] = []
-    for member_id, rec in members.items():
-        result.append({member_id: rec["logs"], "project_member": rec.get("project_member")})
-    return result
+    # Return a single mapping keyed by project_member_id -> logs dict
+    return {member_id: rec["logs"] for member_id, rec in members.items()}
