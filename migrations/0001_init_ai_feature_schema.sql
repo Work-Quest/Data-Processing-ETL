@@ -39,32 +39,6 @@ CREATE INDEX IF NOT EXISTS idx_etl_run_started_at
 ON etl_run(started_at);
 
 
--- ==========================================
--- 3. USER FEATURE TABLE (TRAINING READY)
--- ==========================================
-
-CREATE TABLE IF NOT EXISTS user_feature_daily (
-    user_id BIGINT NOT NULL,
-    date DATE NOT NULL,
-
-    tasks_completed INTEGER,
-    avg_completion_time FLOAT,
-    avg_delay_time FLOAT,
-    avg_complexity FLOAT,
-    quality_score_mean FLOAT,
-    on_time_rate FLOAT,
-
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-
-    PRIMARY KEY (user_id, date)
-);
-
-CREATE INDEX IF NOT EXISTS idx_user_feature_daily_user
-ON user_feature_daily(user_id);
-
-CREATE INDEX IF NOT EXISTS idx_user_feature_daily_date
-ON user_feature_daily(date);
 
 
 -- ==========================================
@@ -124,16 +98,16 @@ ON kmeans_run(is_active)
 WHERE is_active = TRUE;
 
 -- ==========================================
--- 8. user_feature_profile : processed data
+-- 8. user_feature_daily :processed data
 -- ==========================================
-CREATE TABLE IF NOT EXISTS user_feature_profile (
-    user_feature_profile_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL,
-    project_member_id UUID NOT NULL,
+CREATE TABLE IF NOT EXISTS user_feature_daily (
+    project_member_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    project_id UUID NOT NULL,
     work_load_per_day VARCHAR(255) NOT NULL,
     team_work FLOAT NOT NULL,
-    work_category VARCHAR(255) NOT NULL,
-    work_speed FLOAT,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    strength VARCHAR(255) NOT NULL,
+    work_speed VARCHAR(255) NOT NULL,
+    diligence FLOAT,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    modified_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
-

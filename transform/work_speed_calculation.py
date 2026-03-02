@@ -18,4 +18,5 @@ def work_speed_calculate(log):
 
     for i in work_speed_per_day_dict.values():
         work_speed_per_day.append(sum(i)/len(i))
+
     return str(work_speed_per_day)
