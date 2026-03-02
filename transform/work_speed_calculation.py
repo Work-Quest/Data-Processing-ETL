@@ -9,7 +9,6 @@ def work_speed_calculate(log):
         completed_time = log.created_at
         speed =  completed_time - log.task_created_at
         minutes = int(speed.total_seconds() // 60)  # floor minutes
-        # hours = speed.total_seconds() / 3600.0
         day = completed_time.date()
         if day not in work_speed_per_day_dict:
             work_speed_per_day_dict[day] = []

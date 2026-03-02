@@ -4,3 +4,4 @@ ALTER TABLE IF EXISTS user_feature_profile
 DROP COLUMN IF EXISTS user_id;
 
 
+
