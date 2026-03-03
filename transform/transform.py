@@ -1,4 +1,5 @@
 from transform.diligence_calculation import diligence_increment_counts
+from transform.strength_calculation import strength_calculate
 from transform.work_load_calculation import work_load_calculate
 from transform.work_speed_calculation import work_speed_calculate
 from datetime import date
@@ -21,6 +22,7 @@ def transform(data, etl_checkpoint_date: date):
         work_speed_inc = work_speed_calculate(log, data, etl_checkpoint_date)
         work_load_inc = work_load_calculate(log, data, etl_checkpoint_date)
         project_id, p1, p2, p3, p4 = diligence_increment_counts(log)
+        strength, strength_amount = strength_calculate(log)
         (
             project_id_team,
             assigned_inc,
@@ -50,6 +52,8 @@ def transform(data, etl_checkpoint_date: date):
             "task_created_inc": created_inc,
             "task_completed_inc": completed_inc,
             "task_deleted_inc": deleted_inc,
+            "most_frequency_task": strength,
+            "most_frequency_task_counters": strength_amount,
         }
 
     # logs processed: count list items in each member's log dict
