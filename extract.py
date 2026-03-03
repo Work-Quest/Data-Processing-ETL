@@ -57,6 +57,20 @@ def fetch_logs(time_begin):
     data = res.json()
     return list(data["logs"])
 
+def fetch_logs_with_max_time(time_begin):
+    """
+    Fetch logs and also return the max created_at timestamp found (UTC aware datetime).
+    Returns: (logs: list[dict], max_created_at: datetime|None)
+    """
+    logs = fetch_logs(time_begin)
+    max_dt = None
+    for log in logs:
+        if isinstance(log, dict):
+            dt = _parse_dt(log.get("created_at"))
+            if max_dt is None or dt > max_dt:
+                max_dt = dt
+    return logs, max_dt
+
 def extract_data(time_begin):
     """
     extract data to this format

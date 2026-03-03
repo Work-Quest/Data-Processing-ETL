@@ -1,31 +1,40 @@
+from __future__ import annotations
+
 from db import get_connection
 
 
-def get_last_checkpoint():
+def get_last_checkpoint_time(pipeline_name: str = "log_pipeline"):
+    """Return last_time from etl_checkpoint (or None)."""
     conn = get_connection()
     cur = conn.cursor()
 
-    cur.execute("""
-        SELECT last_log_id
+    cur.execute(
+        """
+        SELECT last_time
         FROM etl_checkpoint
-        WHERE pipeline_name = 'log_pipeline'
-    """)
+        WHERE pipeline_name = %s
+        """,
+        (pipeline_name,),
+    )
 
     row = cur.fetchone()
     conn.close()
+    return row[0] if row else None
 
-    return row[0] if row else 0
 
-
-def update_checkpoint(last_log_id):
+def update_checkpoint_time(last_time, pipeline_name: str = "log_pipeline"):
+    """Set last_time and updated_at."""
     conn = get_connection()
     cur = conn.cursor()
 
-    cur.execute("""
+    cur.execute(
+        """
         UPDATE etl_checkpoint
-        SET last_log_id = %s, updated_at = NOW()
-        WHERE pipeline_name = 'log_pipeline'
-    """, (last_log_id,))
+        SET last_time = %s, updated_at = NOW()
+        WHERE pipeline_name = %s
+        """,
+        (last_time, pipeline_name),
+    )
 
     conn.commit()
     conn.close()

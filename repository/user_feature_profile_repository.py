@@ -10,11 +10,22 @@ from db import get_connection
 USER_FEATURE_DAILY_COLUMNS = (
     "project_member_id",
     "project_id",
+    "window_start_date",
     "work_load_per_day",
+    "work_speed",
     "diligence",
     "team_work",
     "strength",
-    "work_speed",
+    "diligence_p1",
+    "diligence_p2",
+    "diligence_p3",
+    "diligence_p4",
+    "team_buff",
+    "team_debuff",
+    "task_assigned",
+    "task_created",
+    "task_completed",
+    "task_deleted",
 )
 
 
@@ -29,11 +40,13 @@ def upsert_user_feature_daily(
     Expected keys per profile:
       - project_member_id (UUID/str)
       - project_id (UUID/str)
+      - window_start_date (date/str)
       - work_load_per_day (str)
-      - diligence (float)
-      - team_work (float)
+      - work_speed (str)  # JSON string
+      - diligence (float)  # raw diligence score
+      - team_work (float)  # t-score
       - strength (str)
-      - work_speed (str/None)
+      - diligence_p1..p4 (int)
 
     Returns number of input rows.
     """
@@ -44,15 +57,31 @@ def upsert_user_feature_daily(
 
     values = []
     for p in rows_list:
+        strength = p.get("strength") or p.get("work_category") or "WIP"
+        # work_speed stored as JSON text; never allow None -> store "[]"
+        work_speed = p.get("work_speed")
+        if work_speed is None:
+            work_speed = "[]"
         values.append(
             (
                 str(p["project_member_id"]),
                 str(p["project_id"]),
+                p["window_start_date"],
                 str(p["work_load_per_day"]),
-                float(p["diligence"]),
-                float(p["team_work"]),
-                str(p["strength"]),
-                str(p["work_speed"]),
+                str(work_speed),
+                float(p.get("diligence") or 0.0),
+                float(p.get("team_work") or 0.0),
+                str(strength),
+                int(p.get("diligence_p1") or 0),
+                int(p.get("diligence_p2") or 0),
+                int(p.get("diligence_p3") or 0),
+                int(p.get("diligence_p4") or 0),
+                int(p.get("team_buff") or 0),
+                int(p.get("team_debuff") or 0),
+                int(p.get("task_assigned") or 0),
+                int(p.get("task_created") or 0),
+                int(p.get("task_completed") or 0),
+                int(p.get("task_deleted") or 0),
             )
         )
 
@@ -62,11 +91,23 @@ def upsert_user_feature_daily(
     ON CONFLICT (project_member_id)
     DO UPDATE SET
         project_id = EXCLUDED.project_id,
+        window_start_date = EXCLUDED.window_start_date,
         work_load_per_day = EXCLUDED.work_load_per_day,
+        work_speed = EXCLUDED.work_speed,
         diligence = EXCLUDED.diligence,
         team_work = EXCLUDED.team_work,
-        strength = EXCLUDED.diligence,
-        work_speed = EXCLUDED.work_speed
+        strength = EXCLUDED.strength,
+        diligence_p1 = EXCLUDED.diligence_p1,
+        diligence_p2 = EXCLUDED.diligence_p2,
+        diligence_p3 = EXCLUDED.diligence_p3,
+        diligence_p4 = EXCLUDED.diligence_p4,
+        team_buff = EXCLUDED.team_buff,
+        team_debuff = EXCLUDED.team_debuff,
+        task_assigned = EXCLUDED.task_assigned,
+        task_created = EXCLUDED.task_created,
+        task_completed = EXCLUDED.task_completed,
+        task_deleted = EXCLUDED.task_deleted,
+        modified_at = NOW()
     """
 
     conn = connection or get_connection()

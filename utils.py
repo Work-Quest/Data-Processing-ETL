@@ -1,6 +1,8 @@
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 from math import sqrt
+import json
+from datetime import date, timedelta
 
 def find_completed_task_by_task_id(data,task_id):
     """
@@ -77,3 +79,55 @@ def parse_t_score(calculated_data):
             }
 
     return t_scores, stats
+
+
+def safe_json_list(value: Any) -> list:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, list) else []
+    except Exception:
+        return []
+
+
+def merge_additive_arrays(
+    *,
+    old_start: date,
+    old_arr: list,
+    new_start: date,
+    new_arr: list,
+    today: date,
+) -> tuple[date, list]:
+    """
+    Merge by addition aligned by date.
+    Returns (start_date, merged_array) covering [start_date..today].
+    """
+    start = old_start or new_start
+    if start is None:
+        start = new_start
+
+    # Ensure old_arr length covers to today
+    need_len = (today - start).days + 1
+    merged = list(old_arr or [])
+    if len(merged) < need_len:
+        merged.extend([0] * (need_len - len(merged)))
+
+    # Add new contributions
+    for i, v in enumerate(new_arr or []):
+        d = new_start + timedelta(days=i)
+        if d < start or d > today:
+            continue
+        idx = (d - start).days
+        merged[idx] = (merged[idx] or 0) + (v or 0)
+
+    return start, merged
+
+
+def diligence_score_from_counts(p1: int, p2: int, p3: int, p4: int) -> float:
+    total = int(p1) + int(p2) + int(p3) + int(p4)
+    if total <= 0:
+        return 0.0
+    return ((p1 * 1) + (p2 * 2) + (p3 * 3) + (p4 * 4)) / float(total)
