@@ -142,6 +142,20 @@ def run_pipeline():
                 # keep previous if classifier didn't run / no tasks in window
                 most_frequency_task_counters = int(old.get("most_frequency_task_counters") or 0)
 
+            # Work quality from reviews: keep old values if no new reviews in this window
+            work_quality = inc.get("work_quality")
+            if work_quality is None and old:
+                work_quality = old.get("work_quality")
+            best_quality = inc.get("best_quality")
+            if best_quality is None and old:
+                best_quality = old.get("best_quality")
+            best_quality_avg = inc.get("best_quality_avg")
+            if best_quality_avg is None and old:
+                best_quality_avg = old.get("best_quality_avg")
+            quality_per_category = inc.get("quality_per_category")
+            if (quality_per_category is None or quality_per_category == "{}") and old:
+                quality_per_category = old.get("quality_per_category")
+
             merged_by_member[mid] = {
                 "project_member_id": mid,
                 "project_id": pid,
@@ -160,6 +174,10 @@ def run_pipeline():
                 "task_deleted": task_deleted,
                 "most_frequency_task": most_frequency_task,
                 "most_frequency_task_counters": most_frequency_task_counters,
+                "work_quality": work_quality,
+                "best_quality": best_quality,
+                "best_quality_avg": best_quality_avg,
+                "quality_per_category": quality_per_category,
             }
 
         # Include all existing members in impacted projects so T-score recompute is correct
@@ -206,6 +224,10 @@ def run_pipeline():
                 "task_deleted": int(r.get("task_deleted") or 0),
                 "most_frequency_task": r.get("most_frequency_task"),
                 "most_frequency_task_counters": int(r.get("most_frequency_task_counters") or 0),
+                "work_quality": r.get("work_quality"),
+                "best_quality": r.get("best_quality"),
+                "best_quality_avg": r.get("best_quality_avg"),
+                "quality_per_category": r.get("quality_per_category"),
             }
 
         # Compute raw diligence + raw team scores, then recompute T-scores per project

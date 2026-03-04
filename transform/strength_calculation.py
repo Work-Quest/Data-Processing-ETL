@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from collections import Counter
-from typing import Any, Tuple
+
+from collections import Counter, defaultdict
+from statistics import mean
 
 from task_classifier import build_default_task_classifier
 
@@ -16,7 +17,7 @@ def _get_clf():
     return _CLF
 
 
-def strength_calculate(logs):
+def frequecy_task_calculate(logs):
     """
     Classify each assigned task's task_name, then return:
       - most_common_category
@@ -49,3 +50,50 @@ def strength_calculate(logs):
     except Exception:
         # Don't let classifier failures break ETL
         return None, 0
+
+def work_quality_calculate(logs):
+    try:
+        reviewed_logs = logs.get("reviewed_task_log") or []
+        if not reviewed_logs:
+            return None, {}, None, None
+
+        task_names = []
+        sentiments = []
+
+        for l in reviewed_logs:
+            task_name = getattr(l, "task_name", None)
+            score = getattr(l, "sentiment_score", None)
+            if not task_name or score is None:
+                continue
+            task_names.append(str(task_name))
+            sentiments.append(float(score))
+
+        if not task_names:
+            return None, {}, None, None
+
+        clf = _get_clf()
+        preds = clf.predict_top1(task_names)
+
+        category_scores = defaultdict(list)
+        for idx, p in enumerate(preds):
+            if isinstance(p, dict) and p.get("label"):
+                category_scores[str(p["label"])].append(sentiments[idx])
+
+        if not sentiments:
+            return None, {}, None, None
+
+        overall_avg_sentiment = mean(sentiments)
+
+        category_avg_sentiment = {
+            cat: (sum(vals) / len(vals)) for cat, vals in category_scores.items() if vals
+        }
+
+        best_category = None
+        best_avg = 0.0
+        if category_avg_sentiment:
+            best_category, best_avg = max(category_avg_sentiment.items(), key=lambda kv: kv[1])
+
+        return float(overall_avg_sentiment), category_avg_sentiment, best_category, float(best_avg)
+
+    except Exception:
+        return None, {}, None, None

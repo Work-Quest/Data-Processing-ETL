@@ -8,3 +8,4 @@ SET last_time = COALESCE(last_time, updated_at, NOW())
 WHERE pipeline_name = 'log_pipeline';
 
 
+

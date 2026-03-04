@@ -18,6 +18,10 @@ USER_FEATURE_DAILY_COLUMNS = (
     "strength",
     "most_frequency_task",
     "most_frequency_task_counters",
+    "work_quality",
+    "best_quality",
+    "best_quality_avg",
+    "quality_per_category",
     "diligence_p1",
     "diligence_p2",
     "diligence_p3",
@@ -64,6 +68,14 @@ def upsert_user_feature_daily(
         work_speed = p.get("work_speed")
         if work_speed is None:
             work_speed = "[]"
+        quality_per_category = p.get("quality_per_category")
+        if quality_per_category is None:
+            quality_per_category = "{}"
+        best_quality_avg = p.get("best_quality_avg")
+        # be defensive: some callers may accidentally pass (best_category, best_avg)
+        if isinstance(best_quality_avg, tuple) and len(best_quality_avg) >= 2:
+            best_quality_avg = best_quality_avg[1]
+
         values.append(
             (
                 str(p["project_member_id"]),
@@ -76,6 +88,10 @@ def upsert_user_feature_daily(
                 str(strength),
                 (p.get("most_frequency_task") if p.get("most_frequency_task") is not None else None),
                 int(p.get("most_frequency_task_counters") or 0),
+                (float(p.get("work_quality")) if p.get("work_quality") is not None else None),
+                (p.get("best_quality") if p.get("best_quality") is not None else None),
+                (float(best_quality_avg) if best_quality_avg is not None else None),
+                str(quality_per_category),
                 int(p.get("diligence_p1") or 0),
                 int(p.get("diligence_p2") or 0),
                 int(p.get("diligence_p3") or 0),
@@ -103,6 +119,10 @@ def upsert_user_feature_daily(
         strength = EXCLUDED.strength,
         most_frequency_task = EXCLUDED.most_frequency_task,
         most_frequency_task_counters = EXCLUDED.most_frequency_task_counters,
+        work_quality = EXCLUDED.work_quality,
+        best_quality = EXCLUDED.best_quality,
+        best_quality_avg = EXCLUDED.best_quality_avg,
+        quality_per_category = EXCLUDED.quality_per_category,
         diligence_p1 = EXCLUDED.diligence_p1,
         diligence_p2 = EXCLUDED.diligence_p2,
         diligence_p3 = EXCLUDED.diligence_p3,

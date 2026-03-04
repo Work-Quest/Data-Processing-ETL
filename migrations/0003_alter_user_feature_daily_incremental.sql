@@ -28,3 +28,4 @@ ALTER TABLE user_feature_daily
 ADD COLUMN IF NOT EXISTS diligence_p4 INTEGER NOT NULL DEFAULT 0;
 
 
+
