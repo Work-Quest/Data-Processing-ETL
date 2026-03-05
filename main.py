@@ -27,7 +27,46 @@ from utils import (
     merge_additive_arrays,
     parse_t_score,
     safe_json_list,
+    _parse_dt,
 )
+
+
+def _normalize_member_logs(raw):
+    """
+    extract.build_member_log_data can be either:
+      - dict[member_id -> logs]
+      - list[ {member_id: logs, 'project_member': ...}, ... ]
+    Normalize to dict[member_id -> logs].
+    """
+    if isinstance(raw, dict):
+        out = {}
+        for k, v in raw.items():
+            if isinstance(v, dict) and "logs" in v and isinstance(v.get("logs"), dict):
+                out[str(k)] = v["logs"]
+            else:
+                out[str(k)] = v
+        return out
+    if isinstance(raw, list):
+        out = {}
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            for k, v in item.items():
+                if k == "project_member":
+                    continue
+                out[str(k)] = v
+        return out
+    return {}
+
+
+def _max_created_at_from_logs(logs):
+    max_dt = None
+    for log in logs or []:
+        if isinstance(log, dict):
+            dt = _parse_dt(log.get("created_at"))
+            if max_dt is None or dt > max_dt:
+                max_dt = dt
+    return max_dt
 
 
 def team_score_from_counts(
@@ -67,11 +106,13 @@ def run_pipeline():
         last_time = get_checkpoint_last_time(conn, pipeline_name) or datetime(
             1970, 1, 1, tzinfo=timezone.utc
         )
-
         run_id = etl_run_start(conn, pipeline_name)
 
         # Fetch only new logs since checkpoint time
         logs, max_dt = fetch_logs_with_max_time(last_time.isoformat())
+
+        if max_dt is None:
+            max_dt = _max_created_at_from_logs(logs)
         if not logs:
             touch_checkpoint(conn, pipeline_name)
             etl_run_finish(conn, run_id, status="SUCCESS", logs_processed=0)
@@ -79,7 +120,7 @@ def run_pipeline():
             print("ETL completed (no new logs)")
             return
 
-        data = build_member_log_data(logs)
+        data = _normalize_member_logs(build_member_log_data(logs))
         checkpoint_date = last_time.date()
         today = date.today()
 
@@ -146,15 +187,65 @@ def run_pipeline():
             work_quality = inc.get("work_quality")
             if work_quality is None and old:
                 work_quality = old.get("work_quality")
+            # (legacy) keep best_quality/quality_per_category only if no new review data this window;
+            # but final derived values below are computed from accumulators anyway.
             best_quality = inc.get("best_quality")
             if best_quality is None and old:
                 best_quality = old.get("best_quality")
-            best_quality_avg = inc.get("best_quality_avg")
-            if best_quality_avg is None and old:
-                best_quality_avg = old.get("best_quality_avg")
             quality_per_category = inc.get("quality_per_category")
             if (quality_per_category is None or quality_per_category == "{}") and old:
                 quality_per_category = old.get("quality_per_category")
+
+            # --- Work quality accumulators (all-time) ---
+            old_q_sum = float(old.get("work_quality_sum") or 0.0) if old else 0.0
+            old_q_count = int(old.get("work_quality_count") or 0) if old else 0
+            inc_q_sum = float(inc.get("work_quality_sum_inc") or 0.0)
+            inc_q_count = int(inc.get("work_quality_count_inc") or 0)
+            work_quality_sum = old_q_sum + inc_q_sum
+            work_quality_count = old_q_count + inc_q_count
+
+            # per-category sum/count JSON merge
+            old_cat_sc = {}
+            if old and old.get("quality_per_category_sum_count"):
+                try:
+                    old_cat_sc = json.loads(old.get("quality_per_category_sum_count") or "{}") or {}
+                except Exception:
+                    old_cat_sc = {}
+
+            inc_cat_sc = inc.get("quality_per_category_sum_count_inc") or {}
+
+            merged_cat_sc = dict(old_cat_sc)
+            for cat, rec in (inc_cat_sc or {}).items():
+                try:
+                    s = float(rec.get("sum") or 0.0)
+                    c = int(rec.get("count") or 0)
+                except Exception:
+                    continue
+                prev = merged_cat_sc.get(cat) or {"sum": 0.0, "count": 0}
+                merged_cat_sc[cat] = {
+                    "sum": float(prev.get("sum") or 0.0) + s,
+                    "count": int(prev.get("count") or 0) + c,
+                }
+
+            # derive avg dict + best category from accumulators
+            derived_avg = {}
+            for cat, rec in merged_cat_sc.items():
+                c = int(rec.get("count") or 0)
+                if c > 0:
+                    derived_avg[str(cat)] = float(rec.get("sum") or 0.0) / c
+
+            if work_quality_count > 0:
+                work_quality = work_quality_sum / work_quality_count
+            else:
+                work_quality = None
+
+            best_quality = None
+            best_quality_avg = None  # internal only; we no longer persist it
+            if derived_avg:
+                best_quality, best_quality_avg = max(derived_avg.items(), key=lambda kv: kv[1])
+
+            quality_per_category = json.dumps(derived_avg)
+            quality_per_category_sum_count = json.dumps(merged_cat_sc)
 
             merged_by_member[mid] = {
                 "project_member_id": mid,
@@ -176,8 +267,10 @@ def run_pipeline():
                 "most_frequency_task_counters": most_frequency_task_counters,
                 "work_quality": work_quality,
                 "best_quality": best_quality,
-                "best_quality_avg": best_quality_avg,
                 "quality_per_category": quality_per_category,
+                "work_quality_sum": work_quality_sum,
+                "work_quality_count": work_quality_count,
+                "quality_per_category_sum_count": quality_per_category_sum_count,
             }
 
         # Include all existing members in impacted projects so T-score recompute is correct
@@ -226,8 +319,10 @@ def run_pipeline():
                 "most_frequency_task_counters": int(r.get("most_frequency_task_counters") or 0),
                 "work_quality": r.get("work_quality"),
                 "best_quality": r.get("best_quality"),
-                "best_quality_avg": r.get("best_quality_avg"),
                 "quality_per_category": r.get("quality_per_category"),
+                "work_quality_sum": r.get("work_quality_sum"),
+                "work_quality_count": int(r.get("work_quality_count") or 0),
+                "quality_per_category_sum_count": r.get("quality_per_category_sum_count"),
             }
 
         # Compute raw diligence + raw team scores, then recompute T-scores per project
