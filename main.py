@@ -20,6 +20,8 @@ from repository.user_feature_daily_query import (
 from repository.user_feature_profile_repository import upsert_user_feature_daily
 from train import train_kmeans
 from transform.transform import transform
+from team_role_artifact_model import TeamRoleArtifactModel
+from config import TEAM_ROLE_ARTIFACT_DIR
 from utils import (
     diligence_score_from_counts,
     merge_additive_arrays,
@@ -51,6 +53,14 @@ def run_pipeline():
     conn = get_connection()
     run_id = None
     pipeline_name = "log_pipeline"
+
+    team_role_model = None
+    if TEAM_ROLE_ARTIFACT_DIR:
+        try:
+            team_role_model = TeamRoleArtifactModel(artifact_dir=TEAM_ROLE_ARTIFACT_DIR)
+        except Exception as e:
+            # Never break ETL if model is misconfigured; just fallback to WIP.
+            print(f"[team-role] Disabled (failed to initialize): {e}")
 
     try:
         ensure_checkpoint_row(conn, pipeline_name)
@@ -123,6 +133,29 @@ def run_pipeline():
             task_completed = int((old.get("task_completed") if old else 0) or 0) + int(inc.get("task_completed_inc") or 0)
             task_deleted = int((old.get("task_deleted") if old else 0) or 0) + int(inc.get("task_deleted_inc") or 0)
 
+            # "strength" from task classification (most frequent task category)
+            most_frequency_task = inc.get("most_frequency_task")
+            if most_frequency_task is None and old:
+                most_frequency_task = old.get("most_frequency_task")
+            most_frequency_task_counters = inc.get("most_frequency_task_counters")
+            if (most_frequency_task_counters is None or most_frequency_task_counters == 0) and old:
+                # keep previous if classifier didn't run / no tasks in window
+                most_frequency_task_counters = int(old.get("most_frequency_task_counters") or 0)
+
+            # Work quality from reviews: keep old values if no new reviews in this window
+            work_quality = inc.get("work_quality")
+            if work_quality is None and old:
+                work_quality = old.get("work_quality")
+            best_quality = inc.get("best_quality")
+            if best_quality is None and old:
+                best_quality = old.get("best_quality")
+            best_quality_avg = inc.get("best_quality_avg")
+            if best_quality_avg is None and old:
+                best_quality_avg = old.get("best_quality_avg")
+            quality_per_category = inc.get("quality_per_category")
+            if (quality_per_category is None or quality_per_category == "{}") and old:
+                quality_per_category = old.get("quality_per_category")
+
             merged_by_member[mid] = {
                 "project_member_id": mid,
                 "project_id": pid,
@@ -139,6 +172,12 @@ def run_pipeline():
                 "task_created": task_created,
                 "task_completed": task_completed,
                 "task_deleted": task_deleted,
+                "most_frequency_task": most_frequency_task,
+                "most_frequency_task_counters": most_frequency_task_counters,
+                "work_quality": work_quality,
+                "best_quality": best_quality,
+                "best_quality_avg": best_quality_avg,
+                "quality_per_category": quality_per_category,
             }
 
         # Include all existing members in impacted projects so T-score recompute is correct
@@ -183,6 +222,12 @@ def run_pipeline():
                 "task_created": int(r.get("task_created") or 0),
                 "task_completed": int(r.get("task_completed") or 0),
                 "task_deleted": int(r.get("task_deleted") or 0),
+                "most_frequency_task": r.get("most_frequency_task"),
+                "most_frequency_task_counters": int(r.get("most_frequency_task_counters") or 0),
+                "work_quality": r.get("work_quality"),
+                "best_quality": r.get("best_quality"),
+                "best_quality_avg": r.get("best_quality_avg"),
+                "quality_per_category": r.get("quality_per_category"),
             }
 
         # Compute raw diligence + raw team scores, then recompute T-scores per project
@@ -218,8 +263,46 @@ def run_pipeline():
             rec["diligence"] = float(diligence_t.get(pid, {}).get(mid, 50.0))
             # store teamwork t-score in team_work column
             rec["team_work"] = float(team_t.get(pid, {}).get(mid, 50.0))
-            rec["strength"] = "WIP"
+            # Prefer task classification result (most frequent task category) over WIP.
+            rec["strength"] = rec.get("most_frequency_task") or rec.get("strength") or "WIP"
             upsert_rows.append(rec)
+
+        # Optional: use local artifacts to assign role into `strength`
+        if team_role_model is not None and upsert_rows:
+            try:
+                feature_rows = []
+                for r in upsert_rows:
+                    # work_load_per_day/work_speed stored as JSON strings
+                    loads = safe_json_list(r.get("work_load_per_day"))
+                    speeds = safe_json_list(r.get("work_speed"))
+                    avg_workload = float(sum(loads) / len(loads)) if loads else 0.0
+                    avg_speed = float(sum(speeds) / len(speeds)) if speeds else 0.0
+
+                    feature_rows.append(
+                        {
+                            "avg_workload": avg_workload,
+                            "team_work": float(r.get("team_work") or 0.0),
+                            # model expects scalar `work_speed`
+                            "work_speed": avg_speed,
+                            # ETL doesn't have explicit quality score; use diligence t-score as proxy.
+                            "overall_quality_score": float(r.get("diligence") or 0.0),
+                        }
+                    )
+
+                roles = team_role_model.predict_roles(feature_rows)
+                for r, role in zip(upsert_rows, roles):
+                    # Only use role-model output if task-classification didn't set strength.
+                    if not r.get("strength") or r.get("strength") == "WIP":
+                        r["strength"] = str(role or "Unknown")
+            except Exception as e:
+                print(f"[team-role] Inference failed; fallback to WIP: {e}")
+                for r in upsert_rows:
+                    if not r.get("strength"):
+                        r["strength"] = "WIP"
+        else:
+            for r in upsert_rows:
+                if not r.get("strength"):
+                    r["strength"] = "WIP"
 
         upsert_user_feature_daily(upsert_rows, connection=conn)
 

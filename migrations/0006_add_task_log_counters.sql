@@ -12,3 +12,4 @@ ALTER TABLE user_feature_daily
 ADD COLUMN IF NOT EXISTS task_deleted INTEGER NOT NULL DEFAULT 0;
 
 
+

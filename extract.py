@@ -24,6 +24,7 @@ from log_dto import (
     HealedLogDTO,
     KillBossLogDTO,
     ReceivedItemLogDTO,
+    ReviewedTasklLogDTO,
     ReviveLogDTO,
     UseItemLogDTO,
 )
@@ -111,7 +112,8 @@ def _empty_member_logs() -> dict[str, list]:
         "create_task_log": [],
         "delete_task_log": [],
         "complete_task_log": [],
-        "assigned_task_log": []
+        "assigned_task_log": [],
+        "reviewed_task_log": [],
     }
 
 
@@ -501,6 +503,55 @@ def build_member_log_data(logs: Iterable[dict[str, Any]]) -> dict[str, dict[str,
             if rec:
                 rec["logs"]["assigned_task_log"].append(dto)
             _set_snapshot_if_missing(member_id, payload.get("receiver_id"))
+            continue
+
+        if event_type == "TASK_REVIEW":
+            # Store under receiver (the member being reviewed)
+            receiver = payload.get("receiver") or {}
+            member_id = str(payload.get("receiver_id") or receiver.get("project_member_id") or "")
+            if not member_id:
+                continue
+
+            # Payload can be either:
+            #  - log payload: {task_id, task, receiver_id, actor, receiver, sentiment_score}
+            #  - API-like payload: {report: {task: {...}, sentiment_score, created_at}, reviewer, receiver}
+            report = payload.get("report") or {}
+            task = report.get("task") if isinstance(report.get("task"), dict) else payload.get("task") or {}
+
+            task_id = str(task.get("task_id") or payload.get("task_id") or "") if isinstance(task, dict) else ""
+            task_name = str(task.get("task_name") or task.get("name") or "") if isinstance(task, dict) else ""
+            task_priority = _to_int(task.get("priority") if isinstance(task, dict) else None)
+            sentiment_score = float(
+                (report.get("sentiment_score") if isinstance(report, dict) else None)
+                or payload.get("sentiment_score")
+                or 0
+            )
+
+            deadline_raw = task.get("deadline") if isinstance(task, dict) else None
+            task_created_at_raw = task.get("created_at") if isinstance(task, dict) else None
+            created_at_raw = (report.get("created_at") if isinstance(report, dict) else None) or created_at
+
+            # User note: sometimes "project_id" is effectively the receiver id in this structure.
+            # Prefer real project_id if present; fallback to receiver member id.
+            dto_project_id = str(project_id) if project_id else member_id
+
+            dto = ReviewedTasklLogDTO(
+                project_id=dto_project_id,
+                project_member_id=member_id,
+                event_type=str(event_type),
+                task_id=task_id,
+                task_name=task_name,
+                task_priority=task_priority,
+                sentiment_score=sentiment_score,
+                task_created_at=_parse_dt(task_created_at_raw),
+                deadline=_parse_dt(deadline_raw),
+                created_at=_parse_dt(created_at_raw),
+            )
+
+            rec = _ensure_member(member_id)
+            if rec:
+                rec["logs"]["reviewed_task_log"].append(dto)
+            _set_snapshot_if_missing(member_id, receiver or payload.get("receiver_id"))
             continue
 
     # Return a single mapping keyed by project_member_id -> logs dict

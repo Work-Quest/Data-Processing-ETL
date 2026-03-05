@@ -5,3 +5,4 @@ ALTER TABLE user_feature_daily
 ADD COLUMN IF NOT EXISTS team_debuff INTEGER NOT NULL DEFAULT 0;
 
 
+

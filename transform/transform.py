@@ -1,8 +1,10 @@
 from transform.diligence_calculation import diligence_increment_counts
+from transform.strength_calculation import frequecy_task_calculate, work_quality_calculate
 from transform.work_load_calculation import work_load_calculate
 from transform.work_speed_calculation import work_speed_calculate
 from datetime import date
 from transform.team_calculation import team_increment_counts
+import json
 
 
 def transform(data, etl_checkpoint_date: date):
@@ -21,6 +23,8 @@ def transform(data, etl_checkpoint_date: date):
         work_speed_inc = work_speed_calculate(log, data, etl_checkpoint_date)
         work_load_inc = work_load_calculate(log, data, etl_checkpoint_date)
         project_id, p1, p2, p3, p4 = diligence_increment_counts(log)
+        overall_avg_sentiment, category_avg_sentiment, best_category, best_avg = work_quality_calculate(log)
+        most_frequency, most_frequency_amount = frequecy_task_calculate(log)
         (
             project_id_team,
             assigned_inc,
@@ -30,6 +34,7 @@ def transform(data, etl_checkpoint_date: date):
             buff_inc,
             debuff_inc,
         ) = team_increment_counts(log)
+
 
         # prefer diligence project_id but fallback to team project_id
         project_id = project_id or project_id_team
@@ -50,6 +55,13 @@ def transform(data, etl_checkpoint_date: date):
             "task_created_inc": created_inc,
             "task_completed_inc": completed_inc,
             "task_deleted_inc": deleted_inc,
+            "most_frequency_task": most_frequency,
+            "most_frequency_task_counters": most_frequency_amount,
+            "strength": best_category,
+            "work_quality": overall_avg_sentiment,
+            "best_quality": best_category,
+            "best_quality_avg": best_avg,
+            "quality_per_category": json.dumps(category_avg_sentiment or {}),
         }
 
     # logs processed: count list items in each member's log dict
