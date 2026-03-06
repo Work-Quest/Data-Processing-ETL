@@ -118,7 +118,7 @@ def run_pipeline():
             etl_run_finish(conn, run_id, status="SUCCESS", logs_processed=0)
             conn.commit()
             print("ETL completed (no new logs)")
-            return
+            return False
 
         data = _normalize_member_logs(build_member_log_data(logs))
         checkpoint_date = last_time.date()
@@ -407,14 +407,6 @@ def run_pipeline():
         etl_run_finish(conn, run_id, status="SUCCESS", logs_processed=logs_processed)
         conn.commit()
 
-        # KMeans retrain (skeleton; fill TODOs in train.py)
-        # Only retrain when we actually processed new logs.
-        try:
-            train_kmeans_if_new_data(should_train=(logs_processed > 0))
-        except Exception as e:
-            print(f"[kmeans] training skipped/failed: {e}")
-
-        print("ETL completed")
 
     except Exception as e:
         conn.rollback()
@@ -424,7 +416,7 @@ def run_pipeline():
         raise
     finally:
         conn.close()
-
+    return  True
 
 def run_training():
     train_kmeans()
@@ -432,7 +424,9 @@ def run_training():
 
 
 if __name__ == "__main__":
-    run_pipeline()
-    run_training()
+    is_run = run_pipeline()
+    if is_run:
+        run_training()
+    print("ETL completed")
 
 
