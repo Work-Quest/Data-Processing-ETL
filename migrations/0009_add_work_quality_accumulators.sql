@@ -10,3 +10,4 @@ ALTER TABLE user_feature_daily
 ADD COLUMN IF NOT EXISTS quality_per_category_sum_count TEXT NULL;
 
 
+

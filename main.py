@@ -18,7 +18,7 @@ from repository.user_feature_daily_query import (
     fetch_user_feature_daily_by_project_ids,
 )
 from repository.user_feature_profile_repository import upsert_user_feature_daily
-from train import train_kmeans
+from train import train_kmeans, train_kmeans_if_new_data
 from transform.transform import transform
 from team_role_artifact_model import TeamRoleArtifactModel
 from config import TEAM_ROLE_ARTIFACT_DIR
@@ -407,6 +407,13 @@ def run_pipeline():
         etl_run_finish(conn, run_id, status="SUCCESS", logs_processed=logs_processed)
         conn.commit()
 
+        # KMeans retrain (skeleton; fill TODOs in train.py)
+        # Only retrain when we actually processed new logs.
+        try:
+            train_kmeans_if_new_data(should_train=(logs_processed > 0))
+        except Exception as e:
+            print(f"[kmeans] training skipped/failed: {e}")
+
         print("ETL completed")
 
     except Exception as e:
@@ -426,5 +433,6 @@ def run_training():
 
 if __name__ == "__main__":
     run_pipeline()
+    run_training()
 
 
