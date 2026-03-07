@@ -12,3 +12,7 @@ ALTER TABLE user_feature_daily
 ADD COLUMN IF NOT EXISTS quality_per_category TEXT NULL;
 
 
+
+
+
+

@@ -20,8 +20,10 @@ USER_FEATURE_DAILY_COLUMNS = (
     "most_frequency_task_counters",
     "work_quality",
     "best_quality",
-    "best_quality_avg",
     "quality_per_category",
+    "work_quality_sum",
+    "work_quality_count",
+    "quality_per_category_sum_count",
     "diligence_p1",
     "diligence_p2",
     "diligence_p3",
@@ -71,11 +73,9 @@ def upsert_user_feature_daily(
         quality_per_category = p.get("quality_per_category")
         if quality_per_category is None:
             quality_per_category = "{}"
-        best_quality_avg = p.get("best_quality_avg")
-        # be defensive: some callers may accidentally pass (best_category, best_avg)
-        if isinstance(best_quality_avg, tuple) and len(best_quality_avg) >= 2:
-            best_quality_avg = best_quality_avg[1]
-
+        quality_per_category_sum_count = p.get("quality_per_category_sum_count")
+        if quality_per_category_sum_count is None:
+            quality_per_category_sum_count = "{}"
         values.append(
             (
                 str(p["project_member_id"]),
@@ -90,8 +90,10 @@ def upsert_user_feature_daily(
                 int(p.get("most_frequency_task_counters") or 0),
                 (float(p.get("work_quality")) if p.get("work_quality") is not None else None),
                 (p.get("best_quality") if p.get("best_quality") is not None else None),
-                (float(best_quality_avg) if best_quality_avg is not None else None),
                 str(quality_per_category),
+                (float(p.get("work_quality_sum")) if p.get("work_quality_sum") is not None else None),
+                int(p.get("work_quality_count") or 0),
+                str(quality_per_category_sum_count),
                 int(p.get("diligence_p1") or 0),
                 int(p.get("diligence_p2") or 0),
                 int(p.get("diligence_p3") or 0),
@@ -121,8 +123,10 @@ def upsert_user_feature_daily(
         most_frequency_task_counters = EXCLUDED.most_frequency_task_counters,
         work_quality = EXCLUDED.work_quality,
         best_quality = EXCLUDED.best_quality,
-        best_quality_avg = EXCLUDED.best_quality_avg,
         quality_per_category = EXCLUDED.quality_per_category,
+        work_quality_sum = EXCLUDED.work_quality_sum,
+        work_quality_count = EXCLUDED.work_quality_count,
+        quality_per_category_sum_count = EXCLUDED.quality_per_category_sum_count,
         diligence_p1 = EXCLUDED.diligence_p1,
         diligence_p2 = EXCLUDED.diligence_p2,
         diligence_p3 = EXCLUDED.diligence_p3,

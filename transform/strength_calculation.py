@@ -55,7 +55,7 @@ def work_quality_calculate(logs):
     try:
         reviewed_logs = logs.get("reviewed_task_log") or []
         if not reviewed_logs:
-            return None, {}, None, None
+            return None, {}, None
 
         task_names = []
         sentiments = []
@@ -69,7 +69,7 @@ def work_quality_calculate(logs):
             sentiments.append(float(score))
 
         if not task_names:
-            return None, {}, None, None
+            return None, {}, None
 
         clf = _get_clf()
         preds = clf.predict_top1(task_names)
@@ -80,7 +80,7 @@ def work_quality_calculate(logs):
                 category_scores[str(p["label"])].append(sentiments[idx])
 
         if not sentiments:
-            return None, {}, None, None
+            return None, {}, None
 
         overall_avg_sentiment = mean(sentiments)
 
@@ -93,7 +93,66 @@ def work_quality_calculate(logs):
         if category_avg_sentiment:
             best_category, best_avg = max(category_avg_sentiment.items(), key=lambda kv: kv[1])
 
-        return float(overall_avg_sentiment), category_avg_sentiment, best_category, float(best_avg)
+        return float(overall_avg_sentiment), category_avg_sentiment, best_category
 
     except Exception:
-        return None, {}, None, None
+        return None, {}, None
+
+
+def work_quality_increment(logs):
+    """
+    Incremental accumulators from reviewed_task_log for the *current ETL window*.
+
+    Returns:
+      - sum_sentiment: float
+      - count_sentiment: int
+      - per_category_sum_count: dict[str, {"sum": float, "count": int}]
+    """
+    try:
+        reviewed_logs = logs.get("reviewed_task_log") or []
+        if not reviewed_logs:
+            return 0.0, 0, {}
+
+        task_names: list[str] = []
+        sentiments: list[float] = []
+        for l in reviewed_logs:
+            task_name = getattr(l, "task_name", None)
+            score = getattr(l, "sentiment_score", None)
+            if not task_name or score is None:
+                continue
+            task_names.append(str(task_name))
+            sentiments.append(float(score))
+
+        if not sentiments:
+            return 0.0, 0, {}
+
+        clf = _get_clf()
+        preds = clf.predict_top1(task_names)
+
+        per_cat: dict[str, dict[str, float | int]] = {}
+        total_sum = 0.0
+        total_count = 0
+
+        for idx, p in enumerate(preds):
+            if idx >= len(sentiments):
+                break
+            score = sentiments[idx]
+            total_sum += score
+            total_count += 1
+
+            label = None
+            if isinstance(p, dict):
+                label = p.get("label")
+            if not label:
+                label = "UNKNOWN"
+
+            rec = per_cat.get(str(label))
+            if rec is None:
+                rec = {"sum": 0.0, "count": 0}
+                per_cat[str(label)] = rec
+            rec["sum"] = float(rec["sum"]) + score
+            rec["count"] = int(rec["count"]) + 1
+
+        return float(total_sum), int(total_count), per_cat
+    except Exception:
+        return 0.0, 0, {}

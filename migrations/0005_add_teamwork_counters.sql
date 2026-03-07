@@ -6,3 +6,7 @@ ADD COLUMN IF NOT EXISTS team_debuff INTEGER NOT NULL DEFAULT 0;
 
 
 
+
+
+
+

@@ -48,9 +48,8 @@ def fetch_logs(time_begin):
     params = {"time_begin_raw": time_begin}
 
     res = requests.get(
-        f"{BACKEND_LOG_ENDPOINT}/api/internal/logs",
+    f"{BACKEND_LOG_ENDPOINT}/api/internal/logs?time_begin={time_begin}",
         headers=headers,
-        params=params,
         timeout=30,
     )
     res.raise_for_status()
@@ -65,11 +64,8 @@ def fetch_logs_with_max_time(time_begin):
     """
     logs = fetch_logs(time_begin)
     max_dt = None
-    for log in logs:
-        if isinstance(log, dict):
-            dt = _parse_dt(log.get("created_at"))
-            if max_dt is None or dt > max_dt:
-                max_dt = dt
+    if logs:
+        max_dt = logs[0]["created_at"]
     return logs, max_dt
 
 def extract_data(time_begin):
