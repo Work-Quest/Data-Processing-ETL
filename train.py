@@ -22,6 +22,7 @@ def persist_kmeans_model_to_db(
     conn,
     *,
     model_bytes: bytes,
+    scaler_bytes: bytes,
     k: int,
     inertia: float | None = None,
     silhouette_score: float | None = None,
@@ -74,10 +75,10 @@ def persist_kmeans_model_to_db(
         )
         cur.execute(
             """
-            INSERT INTO kmeans_model (run_id, model_blob)
-            VALUES (%s, %s)
+            INSERT INTO kmeans_model (run_id, model_blob, scaler_blob)
+            VALUES (%s, %s, %s)
             """,
-            (run_id, model_bytes),
+            (run_id, model_bytes, scaler_bytes),
         )
     conn.commit()
     return run_id
@@ -128,44 +129,6 @@ def get_cluster_summary(df):
         print(f"Error in generating cluster summary: {e}")
         raise
     return summary
-
-
-class TeamRoleClusteringModel:
-    """
-    Custom model class for K-means clustering and role assignment.
-
-    Attributes:
-        kmeans (KMeans): Trained KMeans model.
-        scaler (StandardScaler): StandardScaler for feature scaling.
-        role_mapping (dict): Mapping of cluster labels to roles.
-        feature_names (list): List of feature names used for training.
-    """
-
-    def __init__(self, kmeans=None, scaler=None, role_mapping=None, feature_names=None):
-        self.kmeans = kmeans
-        self.scaler = scaler
-        self.role_mapping = role_mapping
-        self.feature_names = feature_names
-
-    def predict(self, df):
-        """
-        Predict the role of team members based on their features.
-        """
-        try:
-            if self.feature_names is None:
-                raise ValueError("Model not loaded. Call load() first.")
-
-            X = df[self.feature_names].values
-            X_scaled = self.scaler.transform(X)
-            clusters = self.kmeans.predict(X_scaled)
-
-            roles = [self.role_mapping.get(int(c), "Unknown") for c in clusters]
-
-            return roles
-
-        except Exception as e:
-            print(f"Error during prediction: {e}")
-            raise
 
 def explain_assignment_verbose(df, cluster_summary):
     """Explain cluster assignment with a SHAP-like textual style."""
@@ -279,21 +242,26 @@ def train_kmeans_if_new_data(*, should_train: bool) -> None:
             df = explain_assignment_verbose(df, cluster_summary)
 
             # Create model wrapper
-            model = TeamRoleClusteringModel(
-                kmeans=kmeans,
-                scaler=scaler,
-                role_mapping=role_mapping,
-                feature_names=features
-            )
+            # model = TeamRoleClusteringModel(
+            #     kmeans=kmeans,
+            #     scaler=scaler,
+            #     role_mapping=role_mapping,
+            #     feature_names=features
+            # )
 
             # serialize artifact bytes
             model_buffer = io.BytesIO()
-            joblib.dump(model, model_buffer)
+            joblib.dump(kmeans, model_buffer)
             model_bytes = model_buffer.getvalue()
+
+            scaler_buffer = io.BytesIO()
+            joblib.dump(scaler, scaler_buffer)
+            scaler_bytes = scaler_buffer.getvalue()
 
             persist_kmeans_model_to_db(
                 conn,
                 model_bytes=model_bytes,
+                scaler_bytes=scaler_bytes,
                 k=KMEANS_K,
                 inertia=float(kmeans.inertia_),
                 silhouette_score=final_score,
