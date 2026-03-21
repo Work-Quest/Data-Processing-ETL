@@ -21,3 +21,5 @@ def fetch_active_kmeans_blobs(conn):
     return row[0], row[1], row[2]
 
 
+
+

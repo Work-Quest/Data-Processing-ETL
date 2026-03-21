@@ -31,6 +31,19 @@ from utils import (
 )
 
 
+def _is_valid_uuid_string(value: str) -> bool:
+    """Check if a string is a valid UUID format (36 chars, 4 hyphens)."""
+    if not value or not isinstance(value, str):
+        return False
+    # Basic UUID format check: 8-4-4-4-12 hex digits with hyphens
+    if len(value) == 36 and value.count("-") == 4:
+        # Additional check: should not look like a dict string representation
+        if value.startswith("{") or value.startswith("'") or "'" in value:
+            return False
+        return True
+    return False
+
+
 def _normalize_member_logs(raw):
     """
     extract.build_member_log_data can be either:
@@ -127,7 +140,18 @@ def run_pipeline():
         # Compute per-user increments for this window
         increments, logs_processed = transform(data, checkpoint_date)
 
-        impacted_member_ids = list(increments.keys())
+        # Filter out invalid member IDs (e.g., dict string representations)
+        # Also try to extract project_member_id from increment values if keys are invalid
+        impacted_member_ids = []
+        for key in increments.keys():
+            if _is_valid_uuid_string(str(key)):
+                impacted_member_ids.append(str(key))
+            elif isinstance(increments[key], dict) and "project_member_id" in increments[key]:
+                # Fallback: extract from increment value if key is invalid
+                member_id = str(increments[key]["project_member_id"])
+                if _is_valid_uuid_string(member_id) and member_id not in impacted_member_ids:
+                    impacted_member_ids.append(member_id)
+        
         existing_by_member = fetch_user_feature_daily_by_member_ids(conn, impacted_member_ids)
 
         merged_by_member: dict[str, dict] = {}
