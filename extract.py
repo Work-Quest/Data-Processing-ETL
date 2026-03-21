@@ -24,6 +24,7 @@ from log_dto import (
     HealedLogDTO,
     KillBossLogDTO,
     ReceivedItemLogDTO,
+    ReviewedTasklLogDTO,
     ReviveLogDTO,
     UseItemLogDTO,
 )
@@ -47,9 +48,8 @@ def fetch_logs(time_begin):
     params = {"time_begin_raw": time_begin}
 
     res = requests.get(
-        f"{BACKEND_LOG_ENDPOINT}/api/internal/logs",
+    f"{BACKEND_LOG_ENDPOINT}/api/internal/logs?time_begin={time_begin}",
         headers=headers,
-        params=params,
         timeout=30,
     )
     res.raise_for_status()
@@ -64,11 +64,8 @@ def fetch_logs_with_max_time(time_begin):
     """
     logs = fetch_logs(time_begin)
     max_dt = None
-    for log in logs:
-        if isinstance(log, dict):
-            dt = _parse_dt(log.get("created_at"))
-            if max_dt is None or dt > max_dt:
-                max_dt = dt
+    if logs:
+        max_dt = logs[0]["created_at"]
     return logs, max_dt
 
 def extract_data(time_begin):
@@ -92,6 +89,30 @@ def _to_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _extract_member_id(value: Any) -> str:
+    """
+    Extract member ID from value, whether it's a string, dict, or other type.
+    Handles cases where actor_id or other ID fields might be dictionaries instead of UUID strings.
+    """
+    if not value:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        # Try common ID field names in order of preference
+        return str(
+            value.get("project_member_id")
+            or value.get("user_id")
+            or value.get("id")
+            or value.get("member_id")
+            or value.get("player_id")
+            or value.get("receiver_id")
+            or ""
+        )
+    # For other types (int, etc.), convert to string
+    return str(value)
+
+
 def _empty_member_logs() -> dict[str, list]:
     return {
         "attack_log": [],
@@ -111,7 +132,8 @@ def _empty_member_logs() -> dict[str, list]:
         "create_task_log": [],
         "delete_task_log": [],
         "complete_task_log": [],
-        "assigned_task_log": []
+        "assigned_task_log": [],
+        "reviewed_task_log": [],
     }
 
 
@@ -151,14 +173,14 @@ def build_member_log_data(logs: Iterable[dict[str, Any]]) -> dict[str, dict[str,
             continue
         event_type = log.get("event_type")
         project_id = log.get("project_id")
-        actor_id = log.get("actor_id")  # project_member_id for user events
+        actor_id = _extract_member_id(log.get("actor_id"))  # project_member_id for user events
         payload = (log.get("payload") or {}) if isinstance(log.get("payload"), dict) else {}
 
         created_at = _parse_dt(log.get("created_at"))
 
         # ---------- Combat ----------
         if event_type == "USER_ATTACK":
-            member_id = str(actor_id) if actor_id else ""
+            member_id = actor_id
             dto = AttackLogDTO(
                 project_id=str(project_id) if project_id else "",
                 project_member_id=member_id,
@@ -176,12 +198,11 @@ def build_member_log_data(logs: Iterable[dict[str, Any]]) -> dict[str, dict[str,
 
         if event_type == "BOSS_ATTACK":
             # receiver side (player attacked)
-            member_id = (
+            member_id = _extract_member_id(
                 payload.get("player_id")
                 or payload.get("receiver_id")
                 or payload.get("target_player_id")
             )
-            member_id = str(member_id) if member_id else ""
             dto = AttackedLogDTO(
                 project_id=str(project_id) if project_id else "",
                 project_member_id=member_id,
@@ -198,8 +219,8 @@ def build_member_log_data(logs: Iterable[dict[str, Any]]) -> dict[str, dict[str,
 
         # ---------- Heal ----------
         if event_type == "HEAL":
-            healer_id = str(actor_id) if actor_id else ""
-            receiver_id = str(payload.get("receiver_id") or payload.get("player_id") or "") if (payload.get("receiver_id") or payload.get("player_id")) else ""
+            healer_id = actor_id
+            receiver_id = _extract_member_id(payload.get("receiver_id") or payload.get("player_id"))
 
             # healer-side log
             healer_dto = HealLogDTO(
@@ -237,8 +258,8 @@ def build_member_log_data(logs: Iterable[dict[str, Any]]) -> dict[str, dict[str,
             effect_type = (effect.get("effect_type") or effect.get("type") or "")
             effect_value = _to_int(effect.get("effect_value") or effect.get("value"))
 
-            applier_id = str(actor_id) if actor_id else ""
-            receiver_id = str(payload.get("receiver_id") or "") if payload.get("receiver_id") else ""
+            applier_id = actor_id
+            receiver_id = _extract_member_id(payload.get("receiver_id"))
 
             if event_type == "APPLY_BUFF":
                 applier_dto = BuffLogDTO(
@@ -302,8 +323,8 @@ def build_member_log_data(logs: Iterable[dict[str, Any]]) -> dict[str, dict[str,
 
         # ---------- Items ----------
         if event_type == "GIVE_ITEM":
-            giver_id = str(actor_id) if actor_id else ""
-            receiver_id = str(payload.get("receiver_id") or "") if payload.get("receiver_id") else ""
+            giver_id = actor_id
+            receiver_id = _extract_member_id(payload.get("receiver_id"))
             item = payload.get("item") or {}
             effect = payload.get("effect") or {}
             item_name = item.get("item_name") or item.get("name") or ""
@@ -341,7 +362,7 @@ def build_member_log_data(logs: Iterable[dict[str, Any]]) -> dict[str, dict[str,
             continue
 
         if event_type == "USE_ITEM":
-            user_id = str(actor_id) if actor_id else ""
+            user_id = actor_id
             item = payload.get("item") or {}
             effect = payload.get("effect") or {}
             item_name = item.get("item_name") or item.get("name") or ""
@@ -363,7 +384,7 @@ def build_member_log_data(logs: Iterable[dict[str, Any]]) -> dict[str, dict[str,
 
         # ---------- Progression / revive ----------
         if event_type == "KILL_BOSS":
-            member_id = str(actor_id) if actor_id else ""
+            member_id = actor_id
             dto = KillBossLogDTO(
                 project_id=str(project_id) if project_id else "",
                 project_member_id=member_id,
@@ -377,7 +398,7 @@ def build_member_log_data(logs: Iterable[dict[str, Any]]) -> dict[str, dict[str,
             continue
 
         if event_type == "KILL_PLAYER":
-            member_id = str(payload.get("receiver_id"))
+            member_id = _extract_member_id(payload.get("receiver_id"))
             dto = DeadLogDTO(
                 project_id=str(project_id) if project_id else "",
                 project_member_id=member_id,
@@ -391,7 +412,7 @@ def build_member_log_data(logs: Iterable[dict[str, Any]]) -> dict[str, dict[str,
             continue
 
         if event_type in ("USER_REVIVE", "BOSS_REVIVE"):
-            member_id = str(actor_id) if actor_id else str(payload.get("player_id") or "")
+            member_id = actor_id if actor_id else _extract_member_id(payload.get("player_id"))
             dto = ReviveLogDTO(
                 project_id=str(project_id) if project_id else "",
                 project_member_id=member_id,
@@ -406,7 +427,7 @@ def build_member_log_data(logs: Iterable[dict[str, Any]]) -> dict[str, dict[str,
 
         # ---------- Task lifecycle ----------
         if event_type == "TASK_CREATED":
-            member_id = str(actor_id) if actor_id else ""
+            member_id = actor_id
             task = payload.get("task") or {}
             task_id = str(task.get("task_id")) or ""
             task_name = str(task.get("task_name")) or ""
@@ -429,7 +450,7 @@ def build_member_log_data(logs: Iterable[dict[str, Any]]) -> dict[str, dict[str,
             continue
 
         if event_type == "TASK_DELETED":
-            member_id = str(actor_id) if actor_id else ""
+            member_id = actor_id
             task = payload.get("task") or {}
             task_id = str(task.get("task_id")) or ""
             task_name = str(task.get("task_name")) or ""
@@ -453,7 +474,7 @@ def build_member_log_data(logs: Iterable[dict[str, Any]]) -> dict[str, dict[str,
             continue
 
         if event_type == "TASK_COMPLETED":
-            member_id = str(actor_id) if actor_id else ""
+            member_id = actor_id
             task = payload.get("task") or {}
             task_id = str(task.get("task_id")) or ""
             task_name = str(task.get("task_name")) or ""
@@ -479,7 +500,7 @@ def build_member_log_data(logs: Iterable[dict[str, Any]]) -> dict[str, dict[str,
 
         if event_type == "ASSIGN_USER":
             # receiver_id is
-            member_id = str(payload.get("receiver_id"))
+            member_id = _extract_member_id(payload.get("receiver_id"))
             task = payload.get("task") or {}
             task_id = str(task.get("task_id")) or ""
             task_name = str(task.get("task_name")) or ""
@@ -501,6 +522,55 @@ def build_member_log_data(logs: Iterable[dict[str, Any]]) -> dict[str, dict[str,
             if rec:
                 rec["logs"]["assigned_task_log"].append(dto)
             _set_snapshot_if_missing(member_id, payload.get("receiver_id"))
+            continue
+
+        if event_type == "TASK_REVIEW":
+            # Store under receiver (the member being reviewed)
+            receiver = payload.get("receiver") or {}
+            member_id = _extract_member_id(payload.get("receiver_id") or receiver.get("project_member_id"))
+            if not member_id:
+                continue
+
+            # Payload can be either:
+            #  - log payload: {task_id, task, receiver_id, actor, receiver, sentiment_score}
+            #  - API-like payload: {report: {task: {...}, sentiment_score, created_at}, reviewer, receiver}
+            report = payload.get("report") or {}
+            task = report.get("task") if isinstance(report.get("task"), dict) else payload.get("task") or {}
+
+            task_id = str(task.get("task_id") or payload.get("task_id") or "") if isinstance(task, dict) else ""
+            task_name = str(task.get("task_name") or task.get("name") or "") if isinstance(task, dict) else ""
+            task_priority = _to_int(task.get("priority") if isinstance(task, dict) else None)
+            sentiment_score = float(
+                (report.get("sentiment_score") if isinstance(report, dict) else None)
+                or payload.get("sentiment_score")
+                or 0
+            )
+
+            deadline_raw = task.get("deadline") if isinstance(task, dict) else None
+            task_created_at_raw = task.get("created_at") if isinstance(task, dict) else None
+            created_at_raw = (report.get("created_at") if isinstance(report, dict) else None) or created_at
+
+            # User note: sometimes "project_id" is effectively the receiver id in this structure.
+            # Prefer real project_id if present; fallback to receiver member id.
+            dto_project_id = str(project_id) if project_id else member_id
+
+            dto = ReviewedTasklLogDTO(
+                project_id=dto_project_id,
+                project_member_id=member_id,
+                event_type=str(event_type),
+                task_id=task_id,
+                task_name=task_name,
+                task_priority=task_priority,
+                sentiment_score=sentiment_score,
+                task_created_at=_parse_dt(task_created_at_raw),
+                deadline=_parse_dt(deadline_raw),
+                created_at=_parse_dt(created_at_raw),
+            )
+
+            rec = _ensure_member(member_id)
+            if rec:
+                rec["logs"]["reviewed_task_log"].append(dto)
+            _set_snapshot_if_missing(member_id, receiver or payload.get("receiver_id"))
             continue
 
     # Return a single mapping keyed by project_member_id -> logs dict

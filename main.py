@@ -18,14 +18,68 @@ from repository.user_feature_daily_query import (
     fetch_user_feature_daily_by_project_ids,
 )
 from repository.user_feature_profile_repository import upsert_user_feature_daily
-from train import train_kmeans
+from train import train_kmeans, train_kmeans_if_new_data
 from transform.transform import transform
+from team_role_artifact_model import TeamRoleArtifactModel
+from config import TEAM_ROLE_ARTIFACT_DIR
 from utils import (
     diligence_score_from_counts,
     merge_additive_arrays,
     parse_t_score,
     safe_json_list,
+    _parse_dt,
 )
+
+
+def _is_valid_uuid_string(value: str) -> bool:
+    """Check if a string is a valid UUID format (36 chars, 4 hyphens)."""
+    if not value or not isinstance(value, str):
+        return False
+    # Basic UUID format check: 8-4-4-4-12 hex digits with hyphens
+    if len(value) == 36 and value.count("-") == 4:
+        # Additional check: should not look like a dict string representation
+        if value.startswith("{") or value.startswith("'") or "'" in value:
+            return False
+        return True
+    return False
+
+
+def _normalize_member_logs(raw):
+    """
+    extract.build_member_log_data can be either:
+      - dict[member_id -> logs]
+      - list[ {member_id: logs, 'project_member': ...}, ... ]
+    Normalize to dict[member_id -> logs].
+    """
+    if isinstance(raw, dict):
+        out = {}
+        for k, v in raw.items():
+            if isinstance(v, dict) and "logs" in v and isinstance(v.get("logs"), dict):
+                out[str(k)] = v["logs"]
+            else:
+                out[str(k)] = v
+        return out
+    if isinstance(raw, list):
+        out = {}
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            for k, v in item.items():
+                if k == "project_member":
+                    continue
+                out[str(k)] = v
+        return out
+    return {}
+
+
+def _max_created_at_from_logs(logs):
+    max_dt = None
+    for log in logs or []:
+        if isinstance(log, dict):
+            dt = _parse_dt(log.get("created_at"))
+            if max_dt is None or dt > max_dt:
+                max_dt = dt
+    return max_dt
 
 
 def team_score_from_counts(
@@ -52,31 +106,52 @@ def run_pipeline():
     run_id = None
     pipeline_name = "log_pipeline"
 
+    team_role_model = None
+    if TEAM_ROLE_ARTIFACT_DIR:
+        try:
+            team_role_model = TeamRoleArtifactModel(artifact_dir=TEAM_ROLE_ARTIFACT_DIR)
+        except Exception as e:
+            # Never break ETL if model is misconfigured; just fallback to WIP.
+            print(f"[team-role] Disabled (failed to initialize): {e}")
+
     try:
         ensure_checkpoint_row(conn, pipeline_name)
         last_time = get_checkpoint_last_time(conn, pipeline_name) or datetime(
             1970, 1, 1, tzinfo=timezone.utc
         )
-
         run_id = etl_run_start(conn, pipeline_name)
 
         # Fetch only new logs since checkpoint time
         logs, max_dt = fetch_logs_with_max_time(last_time.isoformat())
+
+        if max_dt is None:
+            max_dt = _max_created_at_from_logs(logs)
         if not logs:
             touch_checkpoint(conn, pipeline_name)
             etl_run_finish(conn, run_id, status="SUCCESS", logs_processed=0)
             conn.commit()
             print("ETL completed (no new logs)")
-            return
+            return False
 
-        data = build_member_log_data(logs)
+        data = _normalize_member_logs(build_member_log_data(logs))
         checkpoint_date = last_time.date()
         today = date.today()
 
         # Compute per-user increments for this window
         increments, logs_processed = transform(data, checkpoint_date)
 
-        impacted_member_ids = list(increments.keys())
+        # Filter out invalid member IDs (e.g., dict string representations)
+        # Also try to extract project_member_id from increment values if keys are invalid
+        impacted_member_ids = []
+        for key in increments.keys():
+            if _is_valid_uuid_string(str(key)):
+                impacted_member_ids.append(str(key))
+            elif isinstance(increments[key], dict) and "project_member_id" in increments[key]:
+                # Fallback: extract from increment value if key is invalid
+                member_id = str(increments[key]["project_member_id"])
+                if _is_valid_uuid_string(member_id) and member_id not in impacted_member_ids:
+                    impacted_member_ids.append(member_id)
+        
         existing_by_member = fetch_user_feature_daily_by_member_ids(conn, impacted_member_ids)
 
         merged_by_member: dict[str, dict] = {}
@@ -123,6 +198,79 @@ def run_pipeline():
             task_completed = int((old.get("task_completed") if old else 0) or 0) + int(inc.get("task_completed_inc") or 0)
             task_deleted = int((old.get("task_deleted") if old else 0) or 0) + int(inc.get("task_deleted_inc") or 0)
 
+            # "strength" from task classification (most frequent task category)
+            most_frequency_task = inc.get("most_frequency_task")
+            if most_frequency_task is None and old:
+                most_frequency_task = old.get("most_frequency_task")
+            most_frequency_task_counters = inc.get("most_frequency_task_counters")
+            if (most_frequency_task_counters is None or most_frequency_task_counters == 0) and old:
+                # keep previous if classifier didn't run / no tasks in window
+                most_frequency_task_counters = int(old.get("most_frequency_task_counters") or 0)
+
+            # Work quality from reviews: keep old values if no new reviews in this window
+            work_quality = inc.get("work_quality")
+            if work_quality is None and old:
+                work_quality = old.get("work_quality")
+            # (legacy) keep best_quality/quality_per_category only if no new review data this window;
+            # but final derived values below are computed from accumulators anyway.
+            best_quality = inc.get("best_quality")
+            if best_quality is None and old:
+                best_quality = old.get("best_quality")
+            quality_per_category = inc.get("quality_per_category")
+            if (quality_per_category is None or quality_per_category == "{}") and old:
+                quality_per_category = old.get("quality_per_category")
+
+            # --- Work quality accumulators (all-time) ---
+            old_q_sum = float(old.get("work_quality_sum") or 0.0) if old else 0.0
+            old_q_count = int(old.get("work_quality_count") or 0) if old else 0
+            inc_q_sum = float(inc.get("work_quality_sum_inc") or 0.0)
+            inc_q_count = int(inc.get("work_quality_count_inc") or 0)
+            work_quality_sum = old_q_sum + inc_q_sum
+            work_quality_count = old_q_count + inc_q_count
+
+            # per-category sum/count JSON merge
+            old_cat_sc = {}
+            if old and old.get("quality_per_category_sum_count"):
+                try:
+                    old_cat_sc = json.loads(old.get("quality_per_category_sum_count") or "{}") or {}
+                except Exception:
+                    old_cat_sc = {}
+
+            inc_cat_sc = inc.get("quality_per_category_sum_count_inc") or {}
+
+            merged_cat_sc = dict(old_cat_sc)
+            for cat, rec in (inc_cat_sc or {}).items():
+                try:
+                    s = float(rec.get("sum") or 0.0)
+                    c = int(rec.get("count") or 0)
+                except Exception:
+                    continue
+                prev = merged_cat_sc.get(cat) or {"sum": 0.0, "count": 0}
+                merged_cat_sc[cat] = {
+                    "sum": float(prev.get("sum") or 0.0) + s,
+                    "count": int(prev.get("count") or 0) + c,
+                }
+
+            # derive avg dict + best category from accumulators
+            derived_avg = {}
+            for cat, rec in merged_cat_sc.items():
+                c = int(rec.get("count") or 0)
+                if c > 0:
+                    derived_avg[str(cat)] = float(rec.get("sum") or 0.0) / c
+
+            if work_quality_count > 0:
+                work_quality = work_quality_sum / work_quality_count
+            else:
+                work_quality = None
+
+            best_quality = None
+            best_quality_avg = None  # internal only; we no longer persist it
+            if derived_avg:
+                best_quality, best_quality_avg = max(derived_avg.items(), key=lambda kv: kv[1])
+
+            quality_per_category = json.dumps(derived_avg)
+            quality_per_category_sum_count = json.dumps(merged_cat_sc)
+
             merged_by_member[mid] = {
                 "project_member_id": mid,
                 "project_id": pid,
@@ -139,6 +287,14 @@ def run_pipeline():
                 "task_created": task_created,
                 "task_completed": task_completed,
                 "task_deleted": task_deleted,
+                "most_frequency_task": most_frequency_task,
+                "most_frequency_task_counters": most_frequency_task_counters,
+                "work_quality": work_quality,
+                "best_quality": best_quality,
+                "quality_per_category": quality_per_category,
+                "work_quality_sum": work_quality_sum,
+                "work_quality_count": work_quality_count,
+                "quality_per_category_sum_count": quality_per_category_sum_count,
             }
 
         # Include all existing members in impacted projects so T-score recompute is correct
@@ -183,6 +339,14 @@ def run_pipeline():
                 "task_created": int(r.get("task_created") or 0),
                 "task_completed": int(r.get("task_completed") or 0),
                 "task_deleted": int(r.get("task_deleted") or 0),
+                "most_frequency_task": r.get("most_frequency_task"),
+                "most_frequency_task_counters": int(r.get("most_frequency_task_counters") or 0),
+                "work_quality": r.get("work_quality"),
+                "best_quality": r.get("best_quality"),
+                "quality_per_category": r.get("quality_per_category"),
+                "work_quality_sum": r.get("work_quality_sum"),
+                "work_quality_count": int(r.get("work_quality_count") or 0),
+                "quality_per_category_sum_count": r.get("quality_per_category_sum_count"),
             }
 
         # Compute raw diligence + raw team scores, then recompute T-scores per project
@@ -218,8 +382,46 @@ def run_pipeline():
             rec["diligence"] = float(diligence_t.get(pid, {}).get(mid, 50.0))
             # store teamwork t-score in team_work column
             rec["team_work"] = float(team_t.get(pid, {}).get(mid, 50.0))
-            rec["strength"] = "WIP"
+            # Prefer task classification result (most frequent task category) over WIP.
+            rec["strength"] = rec.get("most_frequency_task") or rec.get("strength") or "WIP"
             upsert_rows.append(rec)
+
+        # Optional: use local artifacts to assign role into `strength`
+        if team_role_model is not None and upsert_rows:
+            try:
+                feature_rows = []
+                for r in upsert_rows:
+                    # work_load_per_day/work_speed stored as JSON strings
+                    loads = safe_json_list(r.get("work_load_per_day"))
+                    speeds = safe_json_list(r.get("work_speed"))
+                    avg_workload = float(sum(loads) / len(loads)) if loads else 0.0
+                    avg_speed = float(sum(speeds) / len(speeds)) if speeds else 0.0
+
+                    feature_rows.append(
+                        {
+                            "avg_workload": avg_workload,
+                            "team_work": float(r.get("team_work") or 0.0),
+                            # model expects scalar `work_speed`
+                            "work_speed": avg_speed,
+                            # ETL doesn't have explicit quality score; use diligence t-score as proxy.
+                            "overall_quality_score": float(r.get("diligence") or 0.0),
+                        }
+                    )
+
+                roles = team_role_model.predict_roles(feature_rows)
+                for r, role in zip(upsert_rows, roles):
+                    # Only use role-model output if task-classification didn't set strength.
+                    if not r.get("strength") or r.get("strength") == "WIP":
+                        r["strength"] = str(role or "Unknown")
+            except Exception as e:
+                print(f"[team-role] Inference failed; fallback to WIP: {e}")
+                for r in upsert_rows:
+                    if not r.get("strength"):
+                        r["strength"] = "WIP"
+        else:
+            for r in upsert_rows:
+                if not r.get("strength"):
+                    r["strength"] = "WIP"
 
         upsert_user_feature_daily(upsert_rows, connection=conn)
 
@@ -229,7 +431,6 @@ def run_pipeline():
         etl_run_finish(conn, run_id, status="SUCCESS", logs_processed=logs_processed)
         conn.commit()
 
-        print("ETL completed")
 
     except Exception as e:
         conn.rollback()
@@ -239,7 +440,7 @@ def run_pipeline():
         raise
     finally:
         conn.close()
-
+    return  True
 
 def run_training():
     train_kmeans()
@@ -247,6 +448,9 @@ def run_training():
 
 
 if __name__ == "__main__":
-    run_pipeline()
+    is_run = run_pipeline()
+    if is_run:
+        run_training()
+    print("ETL completed")
 
 

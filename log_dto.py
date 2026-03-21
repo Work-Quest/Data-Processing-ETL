@@ -192,3 +192,16 @@ class AssignedTasklLogDTO:
     task_created_at: datetime
     deadline: datetime
     created_at: datetime
+
+@dataclass(frozen=True)
+class ReviewedTasklLogDTO:
+    project_id : str
+    project_member_id: str
+    event_type: int
+    task_id : str
+    task_name: str
+    task_priority: int
+    sentiment_score: float
+    task_created_at: datetime
+    deadline: datetime
+    created_at: datetime

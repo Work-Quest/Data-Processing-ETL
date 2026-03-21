@@ -3,3 +3,10 @@ ALTER TABLE etl_checkpoint
 DROP COLUMN IF EXISTS last_log_id;
 
 
+
+
+
+
+
+
+
